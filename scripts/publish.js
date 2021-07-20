@@ -14,6 +14,6 @@ if (!ACCEPTED_VERSIONS.includes(version)) {
   return
 }
 
-const publishCommand = `aragon apm publish ${version} --files public/ --prepublish-script apm:prepublish ${extraArgs}`
+const publishCommand = `aragon apm publish ${version} --files public/ --env rinkeby --prepublish-script apm:prepublish ${extraArgs}`
 console.log(`Running: ${publishCommand}`)
 execute(publishCommand, { stdio: 'inherit' })
