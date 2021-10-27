@@ -1,10 +1,9 @@
 const { BN, sha3 } = require('web3-utils')
 
-const { assertRevert } = require('@aragon/contract-test-helpers/assertThrow')
 const { getEventArgument, getNewProxyAddress } = require('@aragon/contract-test-helpers/events')
 const { assertAmountOfEvents } = require('@aragon/contract-test-helpers/assertEvent')
-const getBlockNumber = require('@aragon/contract-test-helpers/blockNumber')(web3)
 const { encodeCallScript } = require('@aragon/contract-test-helpers/evmScript')
+const { assertRevert } = require("./helpers/assertThrow")
 
 const { deployDao } = require('@aragonone/voting-connectors-contract-utils/test/helpers/deploy.js')(artifacts)
 
@@ -380,7 +379,7 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
         let blockNumber
 
         beforeEach('add balances', async () => {
-          blockNumber = bn(await getBlockNumber())
+          blockNumber = bn(await getBlockNumber(ethers.provider))
           await addBalances(blockNumber)
         })
 
