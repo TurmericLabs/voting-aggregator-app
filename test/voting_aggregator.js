@@ -1,11 +1,12 @@
 const { BN, sha3 } = require('web3-utils')
 
-const { getEventArgument, getNewProxyAddress } = require('@aragon/contract-test-helpers/events')
+const { getNewProxyAddress } = require('@aragon/contract-test-helpers/events')
 const { assertAmountOfEvents } = require('@aragon/contract-test-helpers/assertEvent')
 const { encodeCallScript } = require('@aragon/contract-test-helpers/evmScript')
 const { assertRevert } = require("./helpers/assertThrow")
 
 const { deployDao } = require('@aragonone/voting-connectors-contract-utils/test/helpers/deploy.js')(artifacts)
+const getBlockNumber = require('@aragon/contract-test-helpers/blockNumber')(web3)
 
 const VotingAggregator = artifacts.require('VotingAggregator')
 
@@ -343,14 +344,12 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
       const lastCheckpoint = checkpoints[checkpoints.length - 1]
 
       const addBalances = async (blockNumber) => {
-        Promise.all(users.map(
-          user => checkpoints.map(
-            checkpoint => [
-              token.addBalanceAt(user.address, blockNumber.add(checkpoint), user.amount.mul(checkpoint)),
-              staking.stakeForAt(user.address, blockNumber.add(checkpoint), user.amount.mul(checkpoint).mul(bn(2)))
-            ]
-          )
-        ).reduce((acc, val) => acc.concat(val), []))
+        for (const user of users) {
+          for (const checkpoint of checkpoints) {
+            await token.addBalanceAt(user.address, blockNumber.add(checkpoint), user.amount.mul(checkpoint))
+            await staking.stakeForAt(user.address, blockNumber.add(checkpoint), user.amount.mul(checkpoint).mul(bn(2)))
+          }
+        }
       }
 
       beforeEach('deploy staking, add sources', async () => {
