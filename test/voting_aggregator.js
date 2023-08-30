@@ -82,7 +82,7 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
     const decimals = 18
 
     it('initializes app', async () => {
-      await votingAggregator.initialize(name, symbol, decimals)
+      await votingAggregator.initialize(name, symbol, decimals, false)
       assert.isTrue(await votingAggregator.hasInitialized(), 'not initialized')
       assert.equal(await votingAggregator.name(), name, 'name mismatch')
       assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
@@ -90,8 +90,8 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
     })
 
     it('cannot be initialized twice', async () => {
-      await votingAggregator.initialize(name, symbol, decimals)
-      await assertRevert(votingAggregator.initialize(name, symbol, decimals), ERROR_ALREADY_INITIALIZED)
+      await votingAggregator.initialize(name, symbol, decimals, false)
+      await assertRevert(votingAggregator.initialize(name, symbol, decimals, false), ERROR_ALREADY_INITIALIZED)
     })
   })
 
@@ -103,7 +103,7 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
       const symbol = 'VA'
       const decimals = 18
 
-      await votingAggregator.initialize(name, symbol, decimals)
+      await votingAggregator.initialize(name, symbol, decimals, false)
       token = await ThinCheckpointedTokenMock.new() // mints 1M e 18 tokens to sender
     })
 

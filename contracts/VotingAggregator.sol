@@ -44,6 +44,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     uint256 internal constant MAX_SOURCES = 20;
     uint192 internal constant SOURCE_ENABLED_VALUE = 1;
     uint192 internal constant SOURCE_DISABLED_VALUE = 0;
+    uint256 internal constant PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = 2**130;
 
     string private constant ERROR_NO_POWER_SOURCE = "VA_NO_POWER_SOURCE";
     string private constant ERROR_POWER_SOURCE_TYPE_INVALID = "VA_POWER_SOURCE_TYPE_INVALID";
@@ -57,6 +58,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     string private constant ERROR_CAN_NOT_FORWARD = "VA_CAN_NOT_FORWARD";
     string private constant ERROR_SOURCE_CALL_FAILED = "VA_SOURCE_CALL_FAILED";
     string private constant ERROR_INVALID_CALL_OR_SELECTOR = "VA_INVALID_CALL_OR_SELECTOR";
+    string private constant ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE = "VA_TOO_MANY_TOKENS_FOR_POWER_SOURCE";
+    string private constant ERROR_PROPORTIONAL_MODE_NOT_CHANGED = "VA_PROPORTIONAL_MODE_NOT_CHANGED";
 
     enum PowerSourceType {
         Invalid,
@@ -78,6 +81,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     string public name;
     string public symbol;
     uint8 public decimals;
+    bool public useProportionalMode = false;
 
     mapping (address => PowerSource) internal powerSourceDetails;
     address[] public powerSources;
@@ -97,13 +101,29 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
      * @param _name The aggregator's display name
      * @param _symbol The aggregator's display symbol
      * @param _decimals The aggregator's display decimal units
+     * @param _useProportionalMode If the aggregator will use proportional mode
      */
-    function initialize(string _name, string _symbol, uint8 _decimals) external onlyInit {
+    function initialize(string _name, string _symbol, uint8 _decimals, bool _useProportionalMode) external onlyInit {
         initialized();
 
         name = _name;
         symbol = _symbol;
         decimals = _decimals;
+        useProportionalMode = _useProportionalMode;
+    }
+
+    /**
+     * @notice Change if we are going to use proportional mode
+     * @param _useProportionalMode If the aggregator will use proportional mode
+     */
+    function changeProportionalMode(bool _useProportionalMode)
+        external
+        auth(MANAGE_WEIGHTS_ROLE)
+    {
+        require(
+            useProportionalMode != _useProportionalMode,
+            ERROR_PROPORTIONAL_MODE_NOT_CHANGED
+        );
     }
 
     /**
@@ -308,7 +328,20 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
                 require(success, ERROR_SOURCE_CALL_FAILED);
 
                 uint256 weight = source.weightHistory.getValueAt(_blockNumberUint64);
-                aggregate = aggregate.add(weight.mul(value));
+
+                if(useProportionalMode){
+                    bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, source.sourceType), abi.encode(_blockNumber));
+                    (bool supplySuccess, uint256 supplyValue) = sourceAddr.staticInvoke(supplyInvokeData);
+                    require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
+                    
+                    // TODO: check if value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER) overflows (then ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE)
+                    uint256 normalizedValue = (value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
+                    aggregate = aggregate.add(weight.mul(normalizedValue));
+                }
+                else {
+                    aggregate = aggregate.add(weight.mul(value));
+                }
+                
             }
         }
 
