@@ -319,19 +319,16 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
 
         uint256 aggregate = 0;
         for (uint256 i = 0; i < powerSources.length; i++) {
-            address sourceAddr = powerSources[i];
-            PowerSource storage source = powerSourceDetails[sourceAddr];
-
-            if (source.enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
-                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, source.sourceType), _paramdata);
-                (bool success, uint256 value) = sourceAddr.staticInvoke(invokeData);
+            if (powerSourceDetails[powerSources[i]].enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
+                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, powerSourceDetails[powerSources[i]].sourceType), _paramdata);
+                (bool success, uint256 value) = powerSources[i].staticInvoke(invokeData);
                 require(success, ERROR_SOURCE_CALL_FAILED);
 
-                uint256 weight = source.weightHistory.getValueAt(_blockNumberUint64);
+                uint256 weight = powerSourceDetails[powerSources[i]].weightHistory.getValueAt(_blockNumberUint64);
 
                 if(useProportionalMode){
-                    bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, source.sourceType), abi.encode(_blockNumber));
-                    (bool supplySuccess, uint256 supplyValue) = sourceAddr.staticInvoke(supplyInvokeData);
+                    bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, powerSourceDetails[powerSources[i]].sourceType), abi.encode(_blockNumber));
+                    (bool supplySuccess, uint256 supplyValue) = powerSources[i].staticInvoke(supplyInvokeData);
                     require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
                     
                     // TODO: check if value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER) overflows (then ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE)
