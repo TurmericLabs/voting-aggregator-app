@@ -45,6 +45,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     uint192 internal constant SOURCE_ENABLED_VALUE = 1;
     uint192 internal constant SOURCE_DISABLED_VALUE = 0;
     uint256 internal constant PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = 2**130;
+    uint256 internal constant MAX_TOKENS_PER_POWER_SOURCE = 2**100;
 
     string private constant ERROR_NO_POWER_SOURCE = "VA_NO_POWER_SOURCE";
     string private constant ERROR_POWER_SOURCE_TYPE_INVALID = "VA_POWER_SOURCE_TYPE_INVALID";
@@ -81,7 +82,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     string public name;
     string public symbol;
     uint8 public decimals;
-    bool public useProportionalMode = false;
+    bool public useProportionalMode;
 
     mapping (address => PowerSource) internal powerSourceDetails;
     address[] public powerSources;
@@ -124,6 +125,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
             useProportionalMode != _useProportionalMode,
             ERROR_PROPORTIONAL_MODE_NOT_CHANGED
         );
+        useProportionalMode = _useProportionalMode;
     }
 
     /**
@@ -331,9 +333,11 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
                     (bool supplySuccess, uint256 supplyValue) = powerSources[i].staticInvoke(supplyInvokeData);
                     require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
                     
-                    // TODO: check if value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER) overflows (then ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE)
-                    uint256 normalizedValue = (value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
-                    aggregate = aggregate.add(weight.mul(normalizedValue));
+                    if(supplyValue > 0){
+                        require(value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
+                        uint256 normalizedValue = (value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
+                        aggregate = aggregate.add(weight.mul(normalizedValue));
+                    }
                 }
                 else {
                     aggregate = aggregate.add(weight.mul(value));
