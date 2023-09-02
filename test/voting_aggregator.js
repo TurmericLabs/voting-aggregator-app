@@ -32,9 +32,13 @@ const ERROR_SOURCE_NOT_DISABLED = 'VA_SOURCE_NOT_DISABLED'
 const ERROR_CAN_NOT_FORWARD = 'VA_CAN_NOT_FORWARD'
 const ERROR_SOURCE_CALL_FAILED = 'VA_SOURCE_CALL_FAILED'
 const ERROR_INVALID_CALL_OR_SELECTOR = 'VA_INVALID_CALL_OR_SELECTOR'
+const ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE = "VA_TOO_MANY_TOKENS_FOR_POWER_SOURCE";
+const ERROR_PROPORTIONAL_MODE_NOT_CHANGED = "VA_PROPORTIONAL_MODE_NOT_CHANGED";
 
 const bn = x => new BN(x)
 const bigExp = (x, y) => bn(x).mul(bn(10).pow(bn(y)))
+
+const PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = Math.pow(2, 130);
 
 contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone]) => {
   const PowerSourceType = {
@@ -87,6 +91,16 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
       assert.equal(await votingAggregator.name(), name, 'name mismatch')
       assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
       assert.equal((await votingAggregator.decimals()).toString(), decimals, 'decimals mismatch')
+      assert.equal(await votingAggregator.useProportionalMode(), false, 'use proportional mode mismatch')
+    })
+
+    it('initializes app with proportional mode activated', async () => {
+      await votingAggregator.initialize(name, symbol, decimals, true)
+      assert.isTrue(await votingAggregator.hasInitialized(), 'not initialized')
+      assert.equal(await votingAggregator.name(), name, 'name mismatch')
+      assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
+      assert.equal((await votingAggregator.decimals()).toString(), decimals, 'decimals mismatch')
+      assert.equal(await votingAggregator.useProportionalMode(), true, 'use proportional mode mismatch')
     })
 
     it('cannot be initialized twice', async () => {
@@ -330,6 +344,45 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
 
         const powerSource = await votingAggregator.getPowerSourceDetails(sourceAddr)
         assert.isTrue(powerSource[1], 'source should be enabled')
+      })
+    })
+
+    describe('activate/deactivate proportional mode', ()=>{
+      let isProportionalModeActive
+
+      before(() => async () => {
+        isProportionalModeActive = false
+      })
+
+      it('fails to activate proportional mode if proportional mode already enabled', async () => {
+        if(!isProportionalModeActive){
+          await votingAggregator.changeProportionalMode(true, { from: root });
+          assert.isTrue(await votingAggregator.useProportionalMode())
+        }
+        await assertRevert(votingAggregator.changeProportionalMode(true, { from: root }), ERROR_PROPORTIONAL_MODE_NOT_CHANGED)
+      })
+      it('fails to deactivate proportional mode if proportional mode already disabled',  async () => {
+        if(isProportionalModeActive){
+          await votingAggregator.changeProportionalMode(false, { from: root });
+          assert.isFalse(await votingAggregator.useProportionalMode())
+        }
+        await assertRevert(votingAggregator.changeProportionalMode(false, { from: root }), ERROR_PROPORTIONAL_MODE_NOT_CHANGED)
+      })
+      it('activates proportional mode if not already enabled', async () => {
+        if(isProportionalModeActive){
+          await votingAggregator.changeProportionalMode(false, { from: root });
+          assert.isFalse(await votingAggregator.useProportionalMode())
+        }
+        await votingAggregator.changeProportionalMode(true, { from: root });
+        assert.isTrue(await votingAggregator.useProportionalMode())
+      })
+      it('deactivates proportional mode if proportional mode already enabled',  async () => {
+        if(!isProportionalModeActive){
+          await votingAggregator.changeProportionalMode(true, { from: root });
+          assert.isTrue(await votingAggregator.useProportionalMode())
+        }
+        await votingAggregator.changeProportionalMode(false, { from: root });
+        assert.isFalse(await votingAggregator.useProportionalMode())
       })
     })
 
