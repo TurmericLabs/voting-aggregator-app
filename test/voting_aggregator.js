@@ -109,6 +109,21 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
     })
   })
 
+  describe('App can initialize with proportional mode', () => {
+    const name = 'Voting Aggregator'
+    const symbol = 'VA'
+    const decimals = 18
+
+    it('initializes app with proportional mode activated', async () => {
+      await votingAggregator.initialize(name, symbol, decimals, true)
+      assert.isTrue(await votingAggregator.hasInitialized(), 'not initialized')
+      assert.equal(await votingAggregator.name(), name, 'name mismatch')
+      assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
+      assert.equal((await votingAggregator.decimals()).toString(), decimals, 'decimals mismatch')
+      assert.equal(await votingAggregator.useProportionalMode(), true, 'use proportional mode mismatch')
+    })
+  })
+
   describe('App is initialized', () => {
     let token
 
