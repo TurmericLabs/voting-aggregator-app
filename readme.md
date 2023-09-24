@@ -29,3 +29,8 @@ The Voting Aggregator's initialization parameters:
 And the role you should use when assigning a permission is:
 
 - `ADD_POWER_SOURCE_ROLE`
+
+
+## Node version
+
+This project can be compiled with node 16.20.2
