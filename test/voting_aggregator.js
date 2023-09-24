@@ -427,116 +427,277 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
         assert.equal(sourceAddr2, staking.address, 'second source should be token')
       })
 
-      context('When all sources are enabled', () => {
-        let blockNumber
-
-        beforeEach('add balances', async () => {
-          blockNumber = bn(await getBlockNumber(ethers.provider))
-          await addBalances(blockNumber)
+      context ('Proportional mode disabled', async () => {
+        beforeEach('assert proportional mode disabled', async () => {
+          assert.isFalse(await votingAggregator.useProportionalMode())
         })
 
-        it('user aggregations match', async () => {
-          for (const user of users) {
+        context('When all sources are enabled', () => {
+          let blockNumber
+
+          beforeEach('add balances', async () => {
+            blockNumber = bn(await getBlockNumber(ethers.provider))
+            await addBalances(blockNumber)
+          })
+
+          it('user aggregations match', async () => {
+            for (const user of users) {
+              for (const checkpointOffset of checkpoints) {
+                const checkpoint = blockNumber.add(checkpointOffset)
+                assert.equal(
+                  (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
+                  user.amount.mul(checkpointOffset).mul(bn(7)).toString(),
+                  `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                )
+              }
+
+              assert.equal(
+                (await votingAggregator.balanceOf(user.address)).toString(),
+                (await votingAggregator.balanceOfAt(user.address, lastCheckpoint)).toString(),
+                "balance doesn't match between balanceOf() and balanceOfAt() for latest checkpoint"
+              )
+            }
+          })
+
+          it('total aggregations match', async () => {
             for (const checkpointOffset of checkpoints) {
               const checkpoint = blockNumber.add(checkpointOffset)
               assert.equal(
-                (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
-                user.amount.mul(checkpointOffset).mul(bn(7)).toString(),
-                `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
+                users.reduce(
+                  (acc, user) => acc.add(user.amount.mul(checkpointOffset).mul(bn(7))),
+                  bn(0)
+                ).toString(),
+                `total supply doesn't match at checkpoint ${checkpoint}`
+              )
+
+              assert.equal(
+                (await votingAggregator.totalSupply()).toString(),
+                (await votingAggregator.totalSupplyAt(lastCheckpoint)).toString(),
+                "totalSupply doesn't match between totalSupply() and totalSupplyOfAt() for latest checkpoint"
               )
             }
-
-            assert.equal(
-              (await votingAggregator.balanceOf(user.address)).toString(),
-              (await votingAggregator.balanceOfAt(user.address, lastCheckpoint)).toString(),
-              "balance doesn't match between balanceOf() and balanceOfAt() for latest checkpoint"
-            )
-          }
+          })
         })
 
-        it('total aggregations match', async () => {
-          for (const checkpointOffset of checkpoints) {
-            const checkpoint = blockNumber.add(checkpointOffset)
-            assert.equal(
-              (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
-              users.reduce(
-                (acc, user) => acc.add(user.amount.mul(checkpointOffset).mul(bn(7))),
-                bn(0)
-              ).toString(),
-              `total supply doesn't match at checkpoint ${checkpoint}`
-            )
+        context('When some sources are disabled', () => {
+          let blockNumber
 
-            assert.equal(
-              (await votingAggregator.totalSupply()).toString(),
-              (await votingAggregator.totalSupplyAt(lastCheckpoint)).toString(),
-              "totalSupply doesn't match between totalSupply() and totalSupplyOfAt() for latest checkpoint"
-            )
-          }
-        })
-      })
+          // Make sure to disable source before adding balances for checkpointing
+          beforeEach('disable token source', async () => {
+            await votingAggregator.disableSource(staking.address, { from: root })
+          })
 
-      context('When some sources are disabled', () => {
-        let blockNumber
+          beforeEach('add balances', async () => {
+            blockNumber = bn(await getBlockNumber(ethers.provider))
+            await addBalances(blockNumber)
+          })
 
-        // Make sure to disable source before adding balances for checkpointing
-        beforeEach('disable token source', async () => {
-          await votingAggregator.disableSource(staking.address, { from: root })
-        })
+          it('user aggregations match', async () => {
+            for (const user of users) {
+              for (const checkpointOffset of checkpoints) {
+                const checkpoint = blockNumber.add(checkpointOffset)
+                assert.equal(
+                  (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
+                  user.amount.mul(checkpointOffset).toString(),
+                  `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                )
+              }
+            }
+          })
 
-        beforeEach('add balances', async () => {
-          blockNumber = bn(await getBlockNumber())
-
-          await addBalances(blockNumber)
-        })
-
-        it('user aggregations match', async () => {
-          for (const user of users) {
+          it('total aggregations match', async () => {
             for (const checkpointOffset of checkpoints) {
               const checkpoint = blockNumber.add(checkpointOffset)
               assert.equal(
-                (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
-                user.amount.mul(checkpointOffset).toString(),
-                `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
+                users.reduce(
+                  (acc, user) => acc.add(user.amount.mul(checkpointOffset)),
+                  bn(0)
+                ).toString(),
+                `total supply doesn't match at checkpoint ${checkpoint}`
               )
             }
-          }
+          })
         })
 
-        it('total aggregations match', async () => {
-          for (const checkpointOffset of checkpoints) {
-            const checkpoint = blockNumber.add(checkpointOffset)
-            assert.equal(
-              (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
-              users.reduce(
-                (acc, user) => acc.add(user.amount.mul(checkpointOffset)),
-                bn(0)
-              ).toString(),
-              `total supply doesn't match at checkpoint ${checkpoint}`
-            )
-          }
+        context('When some sources are broken', () => {
+          let brokenSource
+
+          beforeEach('add broken source', async () => {
+            const brokenBalanceToken = await ERC20ViewRevertMock.new()
+            brokenSource = brokenBalanceToken.address
+            await votingAggregator.addPowerSource(brokenBalanceToken.address, PowerSourceType.ERC20WithCheckpointing, 1, { from: root })
+
+            // Break token
+            await brokenBalanceToken.disableBalanceOf()
+          })
+
+          it('fails to aggregate if source is broken after being added', async () => {
+            await assertRevert(votingAggregator.balanceOf(user1), ERROR_SOURCE_CALL_FAILED)
+          })
+
+          it('can aggregate after broken source is disabled', async () => {
+            await votingAggregator.disableSource(brokenSource, { from: root })
+
+            assert.doesNotThrow(async () => await votingAggregator.balanceOf(user1))
+          })
         })
       })
 
-      context('When some sources are broken', () => {
-        let brokenSource
+      context ('Proportional mode enabled', async () => {
+        let totalMintedTokens
 
-        beforeEach('add broken source', async () => {
-          const brokenBalanceToken = await ERC20ViewRevertMock.new()
-          brokenSource = brokenBalanceToken.address
-          await votingAggregator.addPowerSource(brokenBalanceToken.address, PowerSourceType.ERC20WithCheckpointing, 1, { from: root })
+        let proportionalModePrecisionMultiplier = bn(bn(2)**bn(50)).mul(bn(bn(2)**bn(50))).mul(bn(bn(2) ** bn(30)))
 
-          // Break token
-          await brokenBalanceToken.disableBalanceOf()
+        before(async () => {
+
         })
 
-        it('fails to aggregate if source is broken after being added', async () => {
-          await assertRevert(votingAggregator.balanceOf(user1), ERROR_SOURCE_CALL_FAILED)
+        beforeEach('assert proportional mode enabled', async () => {
+          assert.isFalse(await votingAggregator.useProportionalMode());
+          await votingAggregator.changeProportionalMode(true, { from: root });
+          assert.isTrue(await votingAggregator.useProportionalMode());
         })
 
-        it('can aggregate after broken source is disabled', async () => {
-          await votingAggregator.disableSource(brokenSource, { from: root })
+        it('Total tokens', async () => {
+          assert.isTrue(await votingAggregator.useProportionalMode(), "proportional mode not enabled")
+          const blockNumber = bn(await getBlockNumber(ethers.provider))
+          await addBalances(blockNumber)
 
-          assert.doesNotThrow(async () => await votingAggregator.balanceOf(user1))
+          for (const checkpointOffset of checkpoints) {
+            const checkpoint = blockNumber.add(checkpointOffset)
+            const supply = bn(await votingAggregator.totalSupplyAt(checkpoint))
+            const expectedSupply = proportionalModePrecisionMultiplier.mul(bn(4))
+            assert.equal(supply.toString(), expectedSupply.toString(), "tokens incorrect")
+          }
+        })
+
+        context('When all sources are enabled', () => {
+          let blockNumber
+
+          beforeEach('add balances', async () => {
+            blockNumber = bn(await getBlockNumber(ethers.provider))
+            await addBalances(blockNumber)
+          })
+
+          it('user aggregations match', async () => {
+            for (const user of users) {
+              for (const checkpointOffset of checkpoints) {
+                const totalTokenAmount = bigExp(3, 18).mul(bn(checkpointOffset));
+                const totalStackAmount = bigExp(6, 18).mul(bn(checkpointOffset));
+                const checkpoint = blockNumber.add(checkpointOffset)
+                const userBalance = (await votingAggregator.balanceOfAt(user.address, checkpoint));
+                const userBaseAddressStackAmount = user.amount.mul(checkpointOffset).mul(bn(2));
+                const userBaseAddressTokenAmount = user.amount.mul(checkpointOffset).mul(bn(1));
+
+                const relativeUserStackAmount = proportionalModePrecisionMultiplier.mul(bn(userBaseAddressStackAmount)).div(totalStackAmount).mul(bn(3));
+                const relativeUserTokenAmount = proportionalModePrecisionMultiplier.mul(bn(userBaseAddressTokenAmount)).div(totalTokenAmount);
+
+                const userAddressAmount = relativeUserStackAmount.add(relativeUserTokenAmount);
+                assert.equal(
+                  userBalance.toString(),
+                  userAddressAmount.toString(),
+                  `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                )
+              }
+            }
+          })
+
+          it('total aggregations match', async () => {
+            const expectedSupply = proportionalModePrecisionMultiplier.mul(bn(4))
+            for (const checkpointOffset of checkpoints) {
+              const checkpoint = blockNumber.add(checkpointOffset)
+              assert.equal(
+                (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
+                expectedSupply.toString(),
+                `total supply doesn't match at checkpoint ${checkpoint}`
+              )
+
+              assert.equal(
+                (await votingAggregator.totalSupply()).toString(),
+                (await votingAggregator.totalSupplyAt(lastCheckpoint)).toString(),
+                "totalSupply doesn't match between totalSupply() and totalSupplyOfAt() for latest checkpoint"
+              )
+            }
+          })
+        })
+
+        context('When some sources are disabled', () => {
+          let blockNumber
+
+          // Make sure to disable source before adding balances for checkpointing
+          beforeEach('disable token source', async () => {
+            await votingAggregator.disableSource(staking.address, { from: root })
+          })
+
+          beforeEach('add balances', async () => {
+            blockNumber = bn(await getBlockNumber())
+
+            await addBalances(blockNumber)
+          })
+
+          it('user aggregations match', async () => {
+
+            for (const user of users) {
+              for (const checkpointOffset of checkpoints) {
+                const totalTokenAmount = bigExp(3, 18).mul(bn(checkpointOffset));
+                const checkpoint = blockNumber.add(checkpointOffset)
+                const userBalance = (await votingAggregator.balanceOfAt(user.address, checkpoint));
+                const userBaseAddressTokenAmount = user.amount.mul(checkpointOffset).mul(bn(1));
+
+                const relativeUserTokenAmount = proportionalModePrecisionMultiplier.mul(bn(userBaseAddressTokenAmount)).div(totalTokenAmount);
+
+                const userAddressAmount = relativeUserTokenAmount;
+                assert.equal(
+                  userBalance.toString(),
+                  userAddressAmount.toString(),
+                  `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
+                )
+              }
+            }
+          })
+
+          it('total aggregations match', async () => {
+            const expectedSupply = proportionalModePrecisionMultiplier.mul(bn(1))
+            for (const checkpointOffset of checkpoints) {
+              const checkpoint = blockNumber.add(checkpointOffset)
+              assert.equal(
+                (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
+                expectedSupply.toString(),
+                `total supply doesn't match at checkpoint ${checkpoint}`
+              )
+
+              assert.equal(
+                (await votingAggregator.totalSupply()).toString(),
+                (await votingAggregator.totalSupplyAt(lastCheckpoint)).toString(),
+                "totalSupply doesn't match between totalSupply() and totalSupplyOfAt() for latest checkpoint"
+              )
+            }
+          })
+        })
+
+        context('When some sources are broken', () => {
+          let brokenSource
+
+          beforeEach('add broken source', async () => {
+            const brokenBalanceToken = await ERC20ViewRevertMock.new()
+            brokenSource = brokenBalanceToken.address
+            await votingAggregator.addPowerSource(brokenBalanceToken.address, PowerSourceType.ERC20WithCheckpointing, 1, { from: root })
+
+            // Break token
+            await brokenBalanceToken.disableBalanceOf()
+          })
+
+          it('fails to aggregate if source is broken after being added', async () => {
+            await assertRevert(votingAggregator.balanceOf(user1), ERROR_SOURCE_CALL_FAILED)
+          })
+
+          it('can aggregate after broken source is disabled', async () => {
+            await votingAggregator.disableSource(brokenSource, { from: root })
+
+            assert.doesNotThrow(async () => await votingAggregator.balanceOf(user1))
+          })
         })
       })
     })
