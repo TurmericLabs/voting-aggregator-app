@@ -91,6 +91,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     event ChangePowerSourceWeight(address indexed sourceAddress, uint256 newWeight);
     event DisablePowerSource(address indexed sourceAddress);
     event EnablePowerSource(address indexed sourceAddress);
+    event ChangeProportionalMode(bool useProportionalMode);
 
     modifier sourceExists(address _sourceAddr) {
         require(_powerSourceExists(_sourceAddr), ERROR_NO_POWER_SOURCE);
@@ -114,7 +115,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     }
 
     /**
-     * @notice Change if we are going to use proportional mode
+     * @notice Turn the proportional mode `_usePropotionalMode ? 'on' : 'off'`
      * @param _useProportionalMode If the aggregator will use proportional mode
      */
     function changeProportionalMode(bool _useProportionalMode)
@@ -126,6 +127,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
             ERROR_PROPORTIONAL_MODE_NOT_CHANGED
         );
         useProportionalMode = _useProportionalMode;
+
+        emit ChangeProportionalMode(_useProportionalMode);
     }
 
     /**
