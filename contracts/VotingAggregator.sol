@@ -242,11 +242,11 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     // These functions do **NOT** revert if the app is uninitialized to stay compatible with normal ERC20s.
 
     function balanceOfAt(address _owner, uint256 _blockNumber) public view returns (uint256) {
-        return _aggregateAt(_blockNumber, CallType.BalanceOfAt, abi.encode(_owner, _blockNumber));
+        return _aggregateAt(_blockNumber.toUint64Time(), CallType.BalanceOfAt, abi.encode(_owner, _blockNumber));
     }
 
     function totalSupplyAt(uint256 _blockNumber) public view returns (uint256) {
-        return _aggregateAt(_blockNumber, CallType.TotalSupplyAt, abi.encode(_blockNumber));
+        return _aggregateAt(_blockNumber.toUint64Time(), CallType.TotalSupplyAt, abi.encode(_blockNumber));
     }
 
     // Forwarding fns
@@ -319,37 +319,37 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
 
     // Internal fns
 
-    function _aggregateAt(uint256 _blockNumber, CallType _callType, bytes memory _paramdata) internal view returns (uint256) {
-        uint64 _blockNumberUint64 = _blockNumber.toUint64Time();
+    function _aggregateAt(uint64 _blockNumberUint64, CallType _callType, bytes memory _paramdata) internal view returns (uint256) {
+        bool _useProportionalMode = useProportionalMode;
 
         uint256 aggregate = 0;
         for (uint256 i = 0; i < powerSources.length; i++) {
-            if (powerSourceDetails[powerSources[i]].enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
-                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, powerSourceDetails[powerSources[i]].sourceType), _paramdata);
-                (bool success, uint256 value) = powerSources[i].staticInvoke(invokeData);
+            address sourceAddr = powerSources[i];
+            PowerSource storage source = powerSourceDetails[sourceAddr];
+
+            if (source.enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
+                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, source.sourceType), _paramdata);
+                (bool success, uint256 value) = sourceAddr.staticInvoke(invokeData);
                 require(success, ERROR_SOURCE_CALL_FAILED);
 
-                uint256 weight = powerSourceDetails[powerSources[i]].weightHistory.getValueAt(_blockNumberUint64);
-
-                if(useProportionalMode){
-                    bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, powerSourceDetails[powerSources[i]].sourceType), abi.encode(_blockNumber));
-                    (bool supplySuccess, uint256 supplyValue) = powerSources[i].staticInvoke(supplyInvokeData);
-                    require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
-                    
-                    if(supplyValue > 0){
-                        require(value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
-                        uint256 normalizedValue = (value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
-                        aggregate = aggregate.add(weight.mul(normalizedValue));
-                    }
-                }
-                else {
-                    aggregate = aggregate.add(weight.mul(value));
-                }
-                
+                uint256 weight = source.weightHistory.getValueAt(_blockNumberUint64);
+                aggregate = aggregate.add(weight.mul(_useProportionalMode ? _normalizedValue(_blockNumberUint64, sourceAddr, value) : value));
             }
         }
 
         return aggregate;
+    }
+
+    function _normalizedValue(uint64 _blockNumberUint64, address _sourceAddr, uint256 _value) internal view returns (uint256) {
+        bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, powerSourceDetails[_sourceAddr].sourceType), abi.encode(uint256(_blockNumberUint64)));
+        (bool supplySuccess, uint256 supplyValue) = _sourceAddr.staticInvoke(supplyInvokeData);
+        require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
+                    
+        if (supplyValue == 0) {
+            return 0;
+        }
+        require(_value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
+        return (_value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
     }
 
     function _powerSourceExists(address _sourceAddr) internal view returns (bool) {
