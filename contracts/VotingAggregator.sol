@@ -328,10 +328,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
             PowerSource storage source = powerSourceDetails[sourceAddr];
 
             if (source.enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
-                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, source.sourceType), _paramdata);
-                (bool success, uint256 value) = sourceAddr.staticInvoke(invokeData);
-                require(success, ERROR_SOURCE_CALL_FAILED);
-
+                uint256 value = _sourceCall(_callType, sourceAddr, _paramdata);
                 uint256 weight = source.weightHistory.getValueAt(_blockNumberUint64);
                 aggregate = aggregate.add(weight.mul(_useProportionalMode ? _normalizedValue(_blockNumberUint64, sourceAddr, value) : value));
             }
@@ -341,15 +338,19 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     }
 
     function _normalizedValue(uint64 _blockNumberUint64, address _sourceAddr, uint256 _value) internal view returns (uint256) {
-        bytes memory supplyInvokeData = abi.encodePacked(_selectorFor(CallType.TotalSupplyAt, powerSourceDetails[_sourceAddr].sourceType), abi.encode(uint256(_blockNumberUint64)));
-        (bool supplySuccess, uint256 supplyValue) = _sourceAddr.staticInvoke(supplyInvokeData);
-        require(supplySuccess, ERROR_SOURCE_CALL_FAILED);
-                    
+        require(_value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
+        uint256 supplyValue = _sourceCall(CallType.TotalSupplyAt, _sourceAddr, abi.encode(uint256(_blockNumberUint64)));
         if (supplyValue == 0) {
             return 0;
         }
-        require(_value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
         return (_value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
+    }
+
+    function _sourceCall(CallType _callType, address _sourceAddr, bytes memory _paramdata) internal view returns (uint256) {
+        bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, powerSourceDetails[_sourceAddr].sourceType), _paramdata);
+        (bool success, uint256 value) = _sourceAddr.staticInvoke(invokeData);
+        require(success, ERROR_SOURCE_CALL_FAILED);
+        return value;
     }
 
     function _powerSourceExists(address _sourceAddr) internal view returns (bool) {
