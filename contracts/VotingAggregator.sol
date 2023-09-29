@@ -44,8 +44,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     uint256 internal constant MAX_SOURCES = 20;
     uint192 internal constant SOURCE_ENABLED_VALUE = 1;
     uint192 internal constant SOURCE_DISABLED_VALUE = 0;
-    uint256 internal constant PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = 2**130;
-    uint256 internal constant MAX_TOKENS_PER_POWER_SOURCE = 2**100;
+    uint256 internal constant PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = 2 ** 128;
+    uint256 internal constant MAX_TOKENS_PER_POWER_SOURCE = 2 ** 96 - 1;
 
     string private constant ERROR_NO_POWER_SOURCE = "VA_NO_POWER_SOURCE";
     string private constant ERROR_POWER_SOURCE_TYPE_INVALID = "VA_POWER_SOURCE_TYPE_INVALID";
