@@ -44,6 +44,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     uint256 internal constant MAX_SOURCES = 20;
     uint192 internal constant SOURCE_ENABLED_VALUE = 1;
     uint192 internal constant SOURCE_DISABLED_VALUE = 0;
+    uint256 internal constant PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = 2 ** 128;
+    uint256 internal constant MAX_TOKENS_PER_POWER_SOURCE = 2 ** 96 - 1;
 
     string private constant ERROR_NO_POWER_SOURCE = "VA_NO_POWER_SOURCE";
     string private constant ERROR_POWER_SOURCE_TYPE_INVALID = "VA_POWER_SOURCE_TYPE_INVALID";
@@ -57,6 +59,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     string private constant ERROR_CAN_NOT_FORWARD = "VA_CAN_NOT_FORWARD";
     string private constant ERROR_SOURCE_CALL_FAILED = "VA_SOURCE_CALL_FAILED";
     string private constant ERROR_INVALID_CALL_OR_SELECTOR = "VA_INVALID_CALL_OR_SELECTOR";
+    string private constant ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE = "VA_TOO_MANY_TOKENS_FOR_POWER_SOURCE";
+    string private constant ERROR_PROPORTIONAL_MODE_NOT_CHANGED = "VA_PROPORTIONAL_MODE_NOT_CHANGED";
 
     enum PowerSourceType {
         Invalid,
@@ -78,6 +82,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     string public name;
     string public symbol;
     uint8 public decimals;
+    bool public useProportionalMode;
 
     mapping (address => PowerSource) internal powerSourceDetails;
     address[] public powerSources;
@@ -86,6 +91,7 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     event ChangePowerSourceWeight(address indexed sourceAddress, uint256 newWeight);
     event DisablePowerSource(address indexed sourceAddress);
     event EnablePowerSource(address indexed sourceAddress);
+    event ChangeProportionalMode(bool useProportionalMode);
 
     modifier sourceExists(address _sourceAddr) {
         require(_powerSourceExists(_sourceAddr), ERROR_NO_POWER_SOURCE);
@@ -97,13 +103,32 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
      * @param _name The aggregator's display name
      * @param _symbol The aggregator's display symbol
      * @param _decimals The aggregator's display decimal units
+     * @param _useProportionalMode If the aggregator will use proportional mode
      */
-    function initialize(string _name, string _symbol, uint8 _decimals) external onlyInit {
+    function initialize(string _name, string _symbol, uint8 _decimals, bool _useProportionalMode) external onlyInit {
         initialized();
 
         name = _name;
         symbol = _symbol;
         decimals = _decimals;
+        useProportionalMode = _useProportionalMode;
+    }
+
+    /**
+     * @notice Turn the proportional mode `_usePropotionalMode ? 'on' : 'off'`
+     * @param _useProportionalMode If the aggregator will use proportional mode
+     */
+    function changeProportionalMode(bool _useProportionalMode)
+        external
+        auth(MANAGE_WEIGHTS_ROLE)
+    {
+        require(
+            useProportionalMode != _useProportionalMode,
+            ERROR_PROPORTIONAL_MODE_NOT_CHANGED
+        );
+        useProportionalMode = _useProportionalMode;
+
+        emit ChangeProportionalMode(_useProportionalMode);
     }
 
     /**
@@ -217,11 +242,11 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
     // These functions do **NOT** revert if the app is uninitialized to stay compatible with normal ERC20s.
 
     function balanceOfAt(address _owner, uint256 _blockNumber) public view returns (uint256) {
-        return _aggregateAt(_blockNumber, CallType.BalanceOfAt, abi.encode(_owner, _blockNumber));
+        return _aggregateAt(_blockNumber.toUint64Time(), CallType.BalanceOfAt, abi.encode(_owner, _blockNumber));
     }
 
     function totalSupplyAt(uint256 _blockNumber) public view returns (uint256) {
-        return _aggregateAt(_blockNumber, CallType.TotalSupplyAt, abi.encode(_blockNumber));
+        return _aggregateAt(_blockNumber.toUint64Time(), CallType.TotalSupplyAt, abi.encode(_blockNumber));
     }
 
     // Forwarding fns
@@ -294,8 +319,8 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
 
     // Internal fns
 
-    function _aggregateAt(uint256 _blockNumber, CallType _callType, bytes memory _paramdata) internal view returns (uint256) {
-        uint64 _blockNumberUint64 = _blockNumber.toUint64Time();
+    function _aggregateAt(uint64 _blockNumberUint64, CallType _callType, bytes memory _paramdata) internal view returns (uint256) {
+        bool _useProportionalMode = useProportionalMode;
 
         uint256 aggregate = 0;
         for (uint256 i = 0; i < powerSources.length; i++) {
@@ -303,16 +328,29 @@ contract VotingAggregator is IERC20WithCheckpointing, IForwarder, IsContract, ER
             PowerSource storage source = powerSourceDetails[sourceAddr];
 
             if (source.enabledHistory.getValueAt(_blockNumberUint64) == uint256(SOURCE_ENABLED_VALUE)) {
-                bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, source.sourceType), _paramdata);
-                (bool success, uint256 value) = sourceAddr.staticInvoke(invokeData);
-                require(success, ERROR_SOURCE_CALL_FAILED);
-
+                uint256 value = _sourceCall(_callType, sourceAddr, _paramdata);
                 uint256 weight = source.weightHistory.getValueAt(_blockNumberUint64);
-                aggregate = aggregate.add(weight.mul(value));
+                aggregate = aggregate.add(weight.mul(_useProportionalMode ? _normalizedValue(_blockNumberUint64, sourceAddr, value) : value));
             }
         }
 
         return aggregate;
+    }
+
+    function _normalizedValue(uint64 _blockNumberUint64, address _sourceAddr, uint256 _value) internal view returns (uint256) {
+        require(_value <= MAX_TOKENS_PER_POWER_SOURCE, ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE);
+        uint256 supplyValue = _sourceCall(CallType.TotalSupplyAt, _sourceAddr, abi.encode(uint256(_blockNumberUint64)));
+        if (supplyValue == 0) {
+            return 0;
+        }
+        return (_value.mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER)).div(supplyValue);
+    }
+
+    function _sourceCall(CallType _callType, address _sourceAddr, bytes memory _paramdata) internal view returns (uint256) {
+        bytes memory invokeData = abi.encodePacked(_selectorFor(_callType, powerSourceDetails[_sourceAddr].sourceType), _paramdata);
+        (bool success, uint256 value) = _sourceAddr.staticInvoke(invokeData);
+        require(success, ERROR_SOURCE_CALL_FAILED);
+        return value;
     }
 
     function _powerSourceExists(address _sourceAddr) internal view returns (bool) {

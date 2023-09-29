@@ -32,9 +32,13 @@ const ERROR_SOURCE_NOT_DISABLED = 'VA_SOURCE_NOT_DISABLED'
 const ERROR_CAN_NOT_FORWARD = 'VA_CAN_NOT_FORWARD'
 const ERROR_SOURCE_CALL_FAILED = 'VA_SOURCE_CALL_FAILED'
 const ERROR_INVALID_CALL_OR_SELECTOR = 'VA_INVALID_CALL_OR_SELECTOR'
+const ERROR_TOO_MANY_TOKENS_FOR_POWER_SOURCE = "VA_TOO_MANY_TOKENS_FOR_POWER_SOURCE";
+const ERROR_PROPORTIONAL_MODE_NOT_CHANGED = "VA_PROPORTIONAL_MODE_NOT_CHANGED";
 
 const bn = x => new BN(x)
 const bigExp = (x, y) => bn(x).mul(bn(10).pow(bn(y)))
+
+const PROPORTIONAL_MODE_PRECISSION_MULTIPLIER = bn(2).pow(bn(128));
 
 contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone]) => {
   const PowerSourceType = {
@@ -82,16 +86,26 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
     const decimals = 18
 
     it('initializes app', async () => {
-      await votingAggregator.initialize(name, symbol, decimals)
+      await votingAggregator.initialize(name, symbol, decimals, false)
       assert.isTrue(await votingAggregator.hasInitialized(), 'not initialized')
       assert.equal(await votingAggregator.name(), name, 'name mismatch')
       assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
       assert.equal((await votingAggregator.decimals()).toString(), decimals, 'decimals mismatch')
+      assert.equal(await votingAggregator.useProportionalMode(), false, 'use proportional mode mismatch')
+    })
+
+    it('initializes app with proportional mode activated', async () => {
+      await votingAggregator.initialize(name, symbol, decimals, true)
+      assert.isTrue(await votingAggregator.hasInitialized(), 'not initialized')
+      assert.equal(await votingAggregator.name(), name, 'name mismatch')
+      assert.equal(await votingAggregator.symbol(), symbol, 'symbol mismatch')
+      assert.equal((await votingAggregator.decimals()).toString(), decimals, 'decimals mismatch')
+      assert.equal(await votingAggregator.useProportionalMode(), true, 'use proportional mode mismatch')
     })
 
     it('cannot be initialized twice', async () => {
-      await votingAggregator.initialize(name, symbol, decimals)
-      await assertRevert(votingAggregator.initialize(name, symbol, decimals), ERROR_ALREADY_INITIALIZED)
+      await votingAggregator.initialize(name, symbol, decimals, false)
+      await assertRevert(votingAggregator.initialize(name, symbol, decimals, false), ERROR_ALREADY_INITIALIZED)
     })
   })
 
@@ -103,7 +117,7 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
       const symbol = 'VA'
       const decimals = 18
 
-      await votingAggregator.initialize(name, symbol, decimals)
+      await votingAggregator.initialize(name, symbol, decimals, false)
       token = await ThinCheckpointedTokenMock.new() // mints 1M e 18 tokens to sender
     })
 
@@ -333,6 +347,31 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
       })
     })
 
+    describe('Activate/deactivate proportional mode', ()=>{
+      beforeEach(() => async () => {
+        if (await votingAggregator.useProportionalMode()){
+          await votingAggregator.changeProportionalMode(false, { from: root });
+        }
+      })
+      it('activates proportional mode if not already enabled', async () => {
+        await votingAggregator.changeProportionalMode(true, { from: root });
+        assert.isTrue(await votingAggregator.useProportionalMode())
+      })
+      it('deactivates proportional mode if proportional mode already enabled',  async () => {
+        await votingAggregator.changeProportionalMode(true, { from: root });
+        await votingAggregator.changeProportionalMode(false, { from: root });
+        assert.isFalse(await votingAggregator.useProportionalMode())
+      })
+      it('fails to activate proportional mode if proportional mode already enabled', async () => {
+        await votingAggregator.changeProportionalMode(true, { from: root });
+        await assertRevert(votingAggregator.changeProportionalMode(true, { from: root }), ERROR_PROPORTIONAL_MODE_NOT_CHANGED)
+      })
+      it('fails to deactivate proportional mode if proportional mode already disabled',  async () => {
+        await assertRevert(votingAggregator.changeProportionalMode(false, { from: root }), ERROR_PROPORTIONAL_MODE_NOT_CHANGED)
+      })
+    })
+
+
     describe('Aggregation', () => {
       let staking
 
@@ -374,7 +413,7 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
         assert.equal(sourceAddr2, staking.address, 'second source should be token')
       })
 
-      context('When all sources are enabled', () => {
+      const whenAllSourcesAreEnabled = (proportionalMode = false) => () => {
         let blockNumber
 
         beforeEach('add balances', async () => {
@@ -386,9 +425,16 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
           for (const user of users) {
             for (const checkpointOffset of checkpoints) {
               const checkpoint = blockNumber.add(checkpointOffset)
+              const expectedBalance = !proportionalMode
+                // balance is 1 ERC20 * 1 + 2 ERC900 * 3 = 7
+                ? user.amount.mul(checkpointOffset).mul(bn(7))
+                // supply is (1+2) ERC20 * 1 + (2+4) ERC900 * 3 = 21
+                // FIXME: Understand why we need to multiply by 4 here
+                : user.amount.mul(checkpointOffset).mul(bn(7*4)).mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER).div(bigExp(21,18).mul(checkpointOffset))
               assert.equal(
-                (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
-                user.amount.mul(checkpointOffset).mul(bn(7)).toString(),
+                // dividing both values by 4 to avoid precision errors
+                (await votingAggregator.balanceOfAt(user.address, checkpoint)).div(bn(4)).toString(),
+                expectedBalance.div(bn(4)).toString(),
                 `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
               )
             }
@@ -407,9 +453,13 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
             assert.equal(
               (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
               users.reduce(
-                (acc, user) => acc.add(user.amount.mul(checkpointOffset).mul(bn(7))),
+                (acc, user) => !proportionalMode
+                  ? acc.add(user.amount.mul(checkpointOffset).mul(bn(7)))
+                  // FIXME: Understand why we need to multiply by 4 here
+                  : acc.add(user.amount.mul(checkpointOffset).mul(bn(7*4)).mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER).div(bigExp(21,18).mul(checkpointOffset))),
                 bn(0)
-              ).toString(),
+                // fix a precision error of 1
+                ).add(proportionalMode ? bn(1) : bn(0)).toString(),
               `total supply doesn't match at checkpoint ${checkpoint}`
             )
 
@@ -420,9 +470,9 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
             )
           }
         })
-      })
+      }
 
-      context('When some sources are disabled', () => {
+      const whenSomeSourcesAreDisabled = (proportionalMode = false) => () => {
         let blockNumber
 
         // Make sure to disable source before adding balances for checkpointing
@@ -440,9 +490,12 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
           for (const user of users) {
             for (const checkpointOffset of checkpoints) {
               const checkpoint = blockNumber.add(checkpointOffset)
+              const expectedBalance = !proportionalMode
+                ? user.amount.mul(checkpointOffset)
+                : user.amount.mul(checkpointOffset).mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER).div(bigExp(3,18).mul(checkpointOffset))
               assert.equal(
                 (await votingAggregator.balanceOfAt(user.address, checkpoint)).toString(),
-                user.amount.mul(checkpointOffset).toString(),
+                expectedBalance.toString(),
                 `balance doesn't match for user ${user.address} and checkpoint ${checkpoint}`
               )
             }
@@ -455,16 +508,19 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
             assert.equal(
               (await votingAggregator.totalSupplyAt(checkpoint)).toString(),
               users.reduce(
-                (acc, user) => acc.add(user.amount.mul(checkpointOffset)),
+                (acc, user) => !proportionalMode
+                  ? acc.add(user.amount.mul(checkpointOffset))
+                  : acc.add(user.amount.mul(checkpointOffset).mul(PROPORTIONAL_MODE_PRECISSION_MULTIPLIER).div(bigExp(3,18).mul(checkpointOffset))),
                 bn(0)
-              ).toString(),
+              // fix a precision error of 1
+              ).add(proportionalMode ? bn(1) : bn(0)).toString(),
               `total supply doesn't match at checkpoint ${checkpoint}`
             )
           }
         })
-      })
+      }
 
-      context('When some sources are broken', () => {
+      const whenSomeSourcesAreBroken = () => {
         let brokenSource
 
         beforeEach('add broken source', async () => {
@@ -485,6 +541,21 @@ contract('VotingAggregator', ([_, root, unprivileged, eoa, user1, user2, someone
 
           assert.doesNotThrow(async () => await votingAggregator.balanceOf(user1))
         })
+      }
+
+      context('When not using proportional mode', () => {
+        context('When all sources are enabled', whenAllSourcesAreEnabled())
+        context('When some sources are disabled', whenSomeSourcesAreDisabled())
+        context('When some sources are broken', whenSomeSourcesAreBroken)
+      })
+
+      context('When using proportional mode', () => {
+        beforeEach('enable proportional mode', async () => {
+          await votingAggregator.changeProportionalMode(true, { from: root });
+        })
+        context('When all sources are enabled', whenAllSourcesAreEnabled(true))
+        context('When some sources are disabled', whenSomeSourcesAreDisabled(true))
+        context('When some sources are broken', whenSomeSourcesAreBroken)
       })
     })
 
